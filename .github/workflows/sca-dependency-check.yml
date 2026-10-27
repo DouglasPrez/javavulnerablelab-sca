@@ -1,0 +1,95 @@
+name: SCA - Dependency-Check # Nombre que aparece en Actions.
+on: # Eventos que activan el laboratorio.
+  push: # Analiza los cambios publicados.
+    branches: [main] # Limita los push a la rama principal.
+  pull_request: # Analiza las propuestas de cambio.
+    branches: [main] # Ejecuta el análisis para PR dirigidos a main.
+  workflow_dispatch: {} # Permite iniciarlo manualmente desde Actions.
+permissions: # Concede únicamente los permisos necesarios.
+  contents: read # Permite descargar el código fuente.
+  security-events: write # Permite publicar los resultados SARIF.
+concurrency: # Evita análisis redundantes de la misma referencia.
+  group: sca-${{ github.workflow }}-${{ github.ref }} # Separa main de cada PR.
+  cancel-in-progress: true # Cancela el análisis anterior si llega otro cambio.
+jobs: # Define los dos trabajos independientes.
+  dependency-check: # Trabajo principal del análisis SCA.
+    name: Dependency-Check y Code scanning # Identifica el trabajo en Actions.
+    runs-on: ubuntu-latest # Utiliza una máquina virtual Linux de GitHub.
+    timeout-minutes: 60 # Acota la primera descarga de la base NVD.
+    env: # Configuración compartida por los pasos de este trabajo.
+      DC_DATA_DIRECTORY: ${{ github.workspace }}/.dependency-check-data # Hace explícita la ubicación de la base NVD.
+    steps: # Secuencia de preparación, análisis y publicación.
+      - name: Descargar código # Obtiene el commit correspondiente al evento.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # Fija checkout v7.0.1 a un commit verificado.
+        with: # Configura la descarga del repositorio.
+          persist-credentials: false # Evita conservar el token en la configuración de Git.
+      - name: Preparar Java 17 # Instala el JDK requerido por la consigna.
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # Fija setup-java v6.1.0 a un commit verificado.
+        with: # Configura la distribución y la versión de Java.
+          distribution: temurin # Usa la distribución Eclipse Temurin.
+          java-version: '17' # Selecciona Java 17.
+      - name: Restaurar base NVD # Reutiliza los datos descargados en ejecuciones anteriores.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # Fija cache v6.1.0 y restaura sin guardar automáticamente.
+        with: # Define ruta y claves compatibles con la versión del analizador.
+          path: .dependency-check-data # Almacena solamente la base de Dependency-Check.
+          key: ${{ runner.os }}-dc-13.0.0-${{ github.run_id }}-${{ github.run_attempt }} # Crea una instantánea nueva para cada intento.
+          restore-keys: ${{ runner.os }}-dc-13.0.0- # Recupera la instantánea compatible más reciente.
+      - name: Ejecutar Dependency-Check # Genera los reportes y aplica el umbral CVSS.
+        id: scan # Conserva el resultado para el paso que decide el estado final.
+        continue-on-error: true # Permite publicar evidencias antes de propagar el fallo.
+        env: # Expone el secreto únicamente al proceso del analizador.
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }} # Lee el secreto de GitHub sin escribir su valor en el YAML.
+        shell: bash # Usa una shell con control explícito de errores.
+        run: | # Ejecuta el análisis Maven sin desplegar la aplicación.
+          set -euo pipefail # Interrumpe ante errores y variables ausentes.
+          test -n "${NVD_API_KEY}" || { echo "::error::Configura el secreto NVD_API_KEY"; exit 1; } # Falla de forma visible si falta la clave.
+          mvn -B -ntp -s .mvn/sca-settings.xml org.owasp:dependency-check-maven:13.0.0:check -Dformat=ALL "-DdataDirectory=${DC_DATA_DIRECTORY}" -DnvdApiServerId=nvd -DossIndexAnalyzerEnabled=false -DfailBuildOnCVSS=7 # Genera HTML/XML/JSON/SARIF y falla si CVSS es 7 o mayor.
+      - name: Guardar base NVD actualizada # Conserva la descarga incluso si el umbral de seguridad falla.
+        if: ${{ always() && hashFiles('target/dependency-check-report.json') != '' }} # Guarda solo si el análisis llegó a generar el reporte.
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # Usa la misma versión fija de cache.
+        with: # Define la instantánea que la siguiente ejecución reutilizará.
+          path: .dependency-check-data # Guarda la base en la ruta analizada.
+          key: ${{ runner.os }}-dc-13.0.0-${{ github.run_id }}-${{ github.run_attempt }} # Coincide con la clave de restauración del intento.
+      - name: Publicar SARIF en Security # Carga alertas de dependencias en Code scanning.
+        if: ${{ always() && hashFiles('target/dependency-check-report.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }} # Publica si existe SARIF y el evento tiene permiso de escritura.
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # Fija upload-sarif v4 a un commit verificado.
+        with: # Indica el informe y la identidad de este análisis.
+          sarif_file: target/dependency-check-report.sarif # Selecciona el archivo generado por Dependency-Check.
+          category: dependency-check # Mantiene la misma categoría antes y después de la remediación.
+      - name: Conservar reportes descargables # Publica los resultados completos como artefacto de Actions.
+        if: ${{ always() && hashFiles('target/dependency-check-report.*') != '' }} # Conserva evidencias aunque se detecten vulnerabilidades.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # Fija upload-artifact v7.0.2 a un commit verificado.
+        with: # Configura el artefacto descargable.
+          name: dependency-check-${{ github.sha }} # Identifica el commit que se analizó.
+          path: target/dependency-check-report.* # Incluye HTML, XML, JSON y SARIF generados.
+          if-no-files-found: error # Evita aparentar una publicación exitosa sin reportes.
+          retention-days: 30 # Conserva los archivos durante treinta días.
+      - name: Propagar el resultado de seguridad # Define el estado final después de publicar las evidencias.
+        if: ${{ always() && steps.scan.outcome != 'success' }} # Distingue un análisis fallido de un trabajo aprobado.
+        run: exit 1 # Mantiene el pipeline fallido ante vulnerabilidades sobre el umbral o errores del analizador.
+  sbom: # Segundo trabajo solicitado como puntos extra.
+    name: SBOM CycloneDX # Identifica el inventario de componentes.
+    runs-on: ubuntu-latest # Ejecuta la generación en una máquina Linux independiente.
+    timeout-minutes: 20 # Acota la resolución de dependencias.
+    permissions: # Reduce los permisos de este trabajo al mínimo que necesita.
+      contents: read # Solo necesita leer el código fuente.
+    steps: # Preparación, generación y publicación del inventario.
+      - name: Descargar código # Usa el mismo commit del evento.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # Fija checkout v7.0.1 a un commit verificado.
+        with: # Configura Git para este trabajo.
+          persist-credentials: false # Evita conservar el token tras la descarga.
+      - name: Preparar Java 17 # Utiliza el mismo JDK que el análisis.
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # Fija setup-java v6.1.0 a un commit verificado.
+        with: # Configura el entorno de Maven.
+          distribution: temurin # Usa Eclipse Temurin.
+          java-version: '17' # Instala Java 17.
+      - name: Generar inventario CycloneDX # Resuelve las dependencias y sus relaciones.
+        run: mvn -B -ntp org.cyclonedx:cyclonedx-maven-plugin:2.9.3:makeAggregateBom -DoutputFormat=json -DincludeTestScope=false # Genera target/bom.json y excluye las dependencias de pruebas.
+      - name: Publicar SBOM # Permite descargar el inventario desde Actions.
+        if: ${{ always() && hashFiles('target/bom.json') != '' }} # Publica únicamente cuando existe el SBOM.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # Usa la misma versión fija de upload-artifact.
+        with: # Configura la entrega del inventario.
+          name: sbom-cyclonedx-${{ github.sha }} # Vincula el SBOM al commit analizado.
+          path: target/bom.json # Selecciona el archivo JSON CycloneDX.
+          if-no-files-found: error # Exige que el inventario exista.
+          retention-days: 30 # Conserva el inventario durante treinta días.
