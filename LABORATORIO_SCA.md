@@ -30,6 +30,22 @@ El umbral CVSS es 7. Los hallazgos altos o críticos hacen fallar el trabajo des
 
 La compilación del código original con Java 17 falla por `javax.xml.bind` ausente en `JwtUtil.java`. Es un problema de compatibilidad previo a la remediación; el Dockerfile original construye con Java 8. Las tareas SCA y CycloneDX resuelven dependencias correctamente sin desplegar la aplicación. No se presenta este análisis como una prueba funcional de la aplicación.
 
+## Remediación específica de Log4Shell
+
+La rama de remediación actualiza juntos `log4j-api` y `log4j-core` de 2.12.1 a 2.12.4. Se conserva el nivel Java 7 declarado por la aplicación. La rama 2.12.x terminó su mantenimiento; esta es una corrección acotada de Log4Shell y no una declaración de seguridad integral ni una alternativa a migrar a una rama mantenida con un runtime compatible. Los demás componentes vulnerables del laboratorio siguen requiriendo tratamiento.
+
+El código didáctico original y su README describen la versión vulnerable de origen. En esta rama, la página de búsqueda mantiene la llamada de logging para poder verificar la remediación, pero ya no se pretende que reproduzca Log4Shell.
+
+Para probar el mismo Logger y el mismo formato de mensajes con entradas locales inocuas, sin desplegar la aplicación ni usar servicios externos:
+
+```powershell
+.\scripts\Test-Log4jMessages.ps1
+```
+
+La prueba exige que una consulta ordinaria siga registrándose y que `${java:version}` y `${lower:ABC}` permanezcan literales en el mensaje. Falla con el estado original 2.12.1 y permite validar la supresión de interpolación de mensajes tras actualizar. No sustituye un reanálisis SCA ni la validación funcional completa de la aplicación.
+
+Fuentes oficiales: https://logging.apache.org/log4j/2.12.x/changes-report.html y https://logging.apache.org/log4j/2.x/download.html.
+
 ## Entrega
 
 El informe de la práctica documentará los resultados reales, las capturas, la comparación de herramientas, el PR de remediación y las cinco respuestas de análisis. No se publican claves NVD, contraseñas locales ni cachés.

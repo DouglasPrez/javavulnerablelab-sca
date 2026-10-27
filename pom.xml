@@ -40,17 +40,18 @@
     <version>2.3</version>
     <scope>provided</scope>
 </dependency>
-	<!-- OWASP 2025 A03 Software Supply Chain: log4j 2.12.1 is the Java 7 branch
-	     and is still vulnerable to Log4Shell (CVE-2021-44228). 2.12.2 fixed it. -->
+	<!-- SCA remediation: update API and Core together to the final Java 7
+	     maintenance release, 2.12.4. This addresses Log4Shell; the 2.12.x
+	     branch is EOM and a broader runtime migration remains separate. -->
 	<dependency>
 		<groupId>org.apache.logging.log4j</groupId>
 		<artifactId>log4j-api</artifactId>
-		<version>2.12.1</version>
+		<version>2.12.4</version>
 	</dependency>
 	<dependency>
 		<groupId>org.apache.logging.log4j</groupId>
 		<artifactId>log4j-core</artifactId>
-		<version>2.12.1</version>
+		<version>2.12.4</version>
 	</dependency>
 	<!-- OWASP 2025 A08 Software or Data Integrity Failures: commons-collections
 	     3.1 (2004) carries the InvokerTransformer gadget used by ysoserial's
