@@ -42,8 +42,13 @@ jobs: # Define los dos trabajos independientes.
         shell: bash # Usa una shell con control explícito de errores.
         run: | # Ejecuta el análisis Maven sin desplegar la aplicación.
           set -euo pipefail # Interrumpe ante errores y variables ausentes.
-          test -n "${NVD_API_KEY}" || { echo "::error::Configura el secreto NVD_API_KEY"; exit 1; } # Falla de forma visible si falta la clave.
-          mvn -B -ntp -s .mvn/sca-settings.xml org.owasp:dependency-check-maven:13.0.0:check -Dformat=ALL "-DdataDirectory=${DC_DATA_DIRECTORY}" -DnvdApiServerId=nvd -DossIndexAnalyzerEnabled=false -DfailBuildOnCVSS=7 # Genera HTML/XML/JSON/SARIF y falla si CVSS es 7 o mayor.
+          if [[ -n "${NVD_API_KEY}" ]]; then # Prefiere la API autenticada cuando el secreto está configurado.
+            nvd_options=(-DnvdApiServerId=nvd) # Lee la clave mediante settings.xml sin incluirla en los argumentos.
+          else # Permite avanzar con datos oficiales cuando el trámite de la clave está pendiente.
+            echo "::warning::NVD_API_KEY pendiente; se usarán los feeds públicos oficiales del NVD." # Deja explícito el requisito pendiente.
+            nvd_options=('-DnvdDatafeedUrl=https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-{0}.json.gz') # Usa los datos reales del NVD sin una clave ficticia.
+          fi # Finaliza la elección de la fuente oficial.
+          mvn -B -ntp -s .mvn/sca-settings.xml org.owasp:dependency-check-maven:13.0.0:check -Dformat=ALL "-DdataDirectory=${DC_DATA_DIRECTORY}" "${nvd_options[@]}" -DossIndexAnalyzerEnabled=false -DfailBuildOnCVSS=7 # Genera HTML/XML/JSON/SARIF y falla si CVSS es 7 o mayor.
       - name: Guardar base NVD actualizada # Conserva la descarga incluso si el umbral de seguridad falla.
         if: ${{ always() && hashFiles('target/dependency-check-report.json') != '' }} # Guarda solo si el análisis llegó a generar el reporte.
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # Usa la misma versión fija de cache.
